@@ -122,21 +122,22 @@ class AccountWithCategoryRepository:
             return None
         return accounts
 
-    def getAccountForCategory(self, account: Account_by_category):
+    def getAccountForCategoryByName(self, category_name: str):
         try:
             with AccountWithCategoryRepository.__session as session:
-                accounts = (
+                category: Category = (
+                    session.query(Category)
+                    .filter(Category.category_name == category_name)
+                    .all()[0]
+                )
+                account = (
                     session.query(Account_by_category)
-                    .filter(
-                        Account_by_category.category_id == account.category_id,
-                        Account_by_category.account_telegram_id
-                        == account.account_telegram_id,
-                    )
+                    .filter(Category.category_name == category.category_name)
                     .all()[0]
                 )
         except IndexError:
             return None
-        return accounts
+        return account
 
     def removeAccountsForCategory(self, account: Account_by_category):
         try:

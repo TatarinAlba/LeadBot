@@ -15,30 +15,36 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 import json
 import re
 import os
-import config
+import time
 import logging
 import pika
 from telethon import TelegramClient, events
+
+config_data = dict() # data with api_id and api_hash
+
 
 #Check if logs folder exists and if not create's it
 if not os.path.exists('logs'):
     os.makedirs('logs')
 
+with open('config.json', 'r') as f:
+    config_data = json.load(f)
+
 # You can create your applciation by finding information about login in Telethon documentation
-api_id = config.api_id 
-api_hash = config.api_hash
+api_id = config_data['api_id']
+api_hash = config_data['api_hash']
 # If rabbitmq supposed to be on remote server, specify ip
-rabbitmq_host = 'localhost'
+rabbitmq_host = 'rabbitmq'
 # Creating logging file in the project
-logging.basicConfig(level=logging.INFO, filename="logs/StormTrooperLogs.log",filemode="w")
+logging.basicConfig(
+    level=logging.ERROR,
+    filename="logs/logs.log",
+    filemode="w",
+    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logging.Formatter.converter = lambda *args: time.localtime(time.time() + 3 * 3600)
 
-# Getting information about keywords, which should sattisfy
-with open('resources/keywords.txt', 'r') as f:
-    keywords = f.readlines()
-
-# Getting keywords which pattern should not sattisfy
-with open('resources/restricted_keywords.txt', 'r') as f:
-    restricted_keywords = f.readlines()
 
 # Creating client for the user. System version is used for avoiding signing out from all devices after exiting from the program.
 client = TelegramClient('StormTrooper', api_id, api_hash, system_version="4.16.30-vxCUSTOM")
@@ -55,6 +61,13 @@ async def handler(event):
     # Trying to prevent error if some messages were sended for the user P2P.
     # Main purpose for now to focus on group chats with the keymessages
     if event.is_group:
+        # Getting information about keywords, which should sattisfy
+        with open('resources/keywords.txt', 'r') as f:
+            keywords = f.readlines()
+
+        # Getting keywords which pattern should not sattisfy
+        with open('resources/restricted_keywords.txt', 'r') as f:
+            restricted_keywords = f.readlines()
         # Check if message contains any of the restricted keywords
         if any(re.search(keyword.strip().lower(), event.message.message.lower()) for keyword in restricted_keywords):
             return

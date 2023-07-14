@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.session import Session
 
 Base = declarative_base()
-engine = create_engine("sqlite:///telegram.db", echo=True)
+engine = create_engine("sqlite:///resources/telegram.db", echo=True)
 
 """Instance containing account credentials"""
 
@@ -53,7 +53,7 @@ class Account_by_category(Base):
         nullable=False,
         index=True,
     )
-    account_telegram_id = Column(Integer, primary_key=True, index=True, nullable=False)
+    account_telegram_id = Column(Integer,  ForeignKey("accounts.account_telegram_id", ondelete="CASCADE"), primary_key=True, index=True, nullable=False)
     is_enabled_for_search = Column(Boolean, nullable=False, default=True)
 
     def __init__(self, category_id, account_telegram_id, is_enabled_for_search=True):

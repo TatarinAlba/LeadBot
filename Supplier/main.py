@@ -17,6 +17,7 @@ import json
 import asyncio
 import os
 import logging
+import time
 from aiogram import Bot, Dispatcher, types, executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -28,20 +29,35 @@ from respositories import (
     AccountWithCategoryRepository,
 )
 from model import Account, Account_by_category, Category
-from config import TOKEN
+
+config_data = dict()  # data with TOKEN
+
+with open('config.json', 'r') as f:
+    config_data = json.load(f)
+
 
 # Check if logs folder exists and if not create
 if not os.path.exists("logs"):
     os.makedirs("logs")
 
+if not os.path.exists("resources"):
+    os.makedirs("resources")
+
 # Instance of the bot
-bot = Bot(token=TOKEN)
+bot = Bot(config_data['TOKEN'])
 
 # Storage for using FSM
 storage = MemoryStorage()
 
 # Logging information
-logging.basicConfig(level=logging.ERROR, filename="logs/logs.log", filemode="w")
+logging.basicConfig(
+    level=logging.ERROR,
+    filename="logs/logs.log",
+    filemode="w",
+    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logging.Formatter.converter = lambda *args: time.localtime(time.time() + 3 * 3600)
 dp = Dispatcher(bot, storage=storage)
 # Repositories for using database
 account_repo = AccountRepository()
@@ -60,27 +76,37 @@ class WorkingStates(StatesGroup):
     stop = State()
 
 
-@dp.message_handler(commands="start")
+@dp.message_handler(commands="start", state="*")
 async def starting_process(message: types.Message, state: FSMContext):
     # Checkcing current state of the user. We will not accept users for this command if they already have an account
     current_state = await state.get_state()
     # Checking for only private messages
     if message.chat.type == "private" and current_state is None:
         # Temporary solution, because we are in the process of development ability to add more users. Now only one user can use bot
-        admin = account_repo.getAccountById(message.from_user.id)
-        if admin != None and admin.account_telegram_id == message.from_user.id:
+        admin: Account = account_repo.getAccountById(message.from_user.id)
+        if admin == None or (admin != None and len(account_repo.getAllAcounts()) == 1):
             # If current accout were not registred before, we will add it to database
-            admin = Account(message.from_user.id)
-            account_repo.addAccount(admin)
-            await bot.send_message(
-                chat_id=message.from_id,
-                text="Привет! 🤖👋😊\n\nЯ рад видеть вас здесь! Я бот в Telegram, который отслеживает лиды для вас. Моя задача - помочь вам получать больше клиентов и увеличивать продажи. Если у вас есть какие-либо вопросы или пожелания, не стесняйтесь обращаться ко мне. Я всегда готов помочь! 😊👍",
-                reply_markup=nav.account_menu,
-            )
-            # Changing state to entered for the current user
-            await state.set_state(WorkingStates.entered)
-
-
+            if admin == None:
+                admin = Account(message.from_user.id)
+                account_repo.addAccount(admin)
+                # Changing state to entered for the current user
+                await state.set_state(WorkingStates.entered)
+                await bot.send_message(
+                    chat_id=message.from_id,
+                    text="Привет! 🤖👋😊\n\nЯ рад видеть вас здесь! Я бот в Telegram, который отслеживает лиды для вас. Моя задача - помочь вам получать больше клиентов и увеличивать продажи. Если у вас есть какие-либо вопросы или пожелания, не стесняйтесь обращаться ко мне. Я всегда готов помочь! 😊👍",
+                    reply_markup=nav.account_menu,
+                )
+            else:
+                account: Account_by_category = account_and_category_repo.getAccountForCategoryByName("Fulfilment")
+                if account.is_enabled_for_search == True:
+                    await state.set_state(WorkingStates.run)
+                else:
+                    await state.set_state(WorkingStates.stop)
+                await bot.send_message(
+                        chat_id=message.from_id,
+                        text="Рад видеть тебя снова! 🤖👋😊\n\nЗаглянешь в настройки своего бота?\n\n/bot_settings",
+                        reply_markup=nav.close_menu
+                )
 @dp.callback_query_handler(text="category_menu", state=WorkingStates.entered)
 async def category_menu_output(query_call: types.CallbackQuery):
     await bot.delete_message(
@@ -105,24 +131,23 @@ async def category_menu_output(query_call: types.CallbackQuery, state: FSMContex
         await bot.delete_message(
             chat_id=query_call.from_user.id, message_id=query_call.message.message_id
         )
+        await state.set_state(WorkingStates.settings)
         await bot.send_message(
             chat_id=query_call.from_user.id,
             text="🚫 Вы уже подписаны на это\n\nЕсли вы хотите запустить или приостановить бота, используйте команду /bot_settings",
             reply_markup=nav.close_menu,
         )
-        await state.set_state(WorkingStates.battle)
         return
     account_and_category_repo.addAccountForCategory(account_with_category)
     await bot.delete_message(
         chat_id=query_call.from_user.id, message_id=query_call.message.message_id
     )
+    await state.set_state(WorkingStates.settings)
     await bot.send_message(
         chat_id=query_call.from_user.id,
         text="✅ Успешно\n\nЕсли вы хотите запустить или приостановить бота, используйте команду /bot_settings",
         reply_markup=nav.close_menu,
     )
-    await state.set_state(WorkingStates.battle)
-
 
 @dp.callback_query_handler(text="close", state="*")
 async def close_window(query_call: types.CallbackQuery):
@@ -236,16 +261,13 @@ async def on_message(message):
 """
 Function for registering RabbitMQ consumer
 """
-
-
 async def register():
-    connection = await aio_pika.connect_robust("amqp://guest:guest@localhost/")
-    rabbit_mq_channel = await connection.channel()
-    queue = await rabbit_mq_channel.declare_queue("messages")
-    await queue.consume(on_message)
-
-
-if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(register())
-    executor.start_polling(dp, skip_updates=True)
+    while True:
+        connection = await aio_pika.connect_robust("amqp://guest:guest@rabbitmq")
+        rabbit_mq_channel = await connection.channel()
+        queue = await rabbit_mq_channel.declare_queue("messages")
+        await queue.consume(on_message)
+        
+loop = asyncio.get_event_loop()
+loop.create_task(register())
+executor.start_polling(dp, skip_updates=True)
