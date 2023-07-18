@@ -18,12 +18,14 @@ import os
 import time
 import logging
 import pika
+import telethon.tl.functions as functions
+from telethon.tl.types import InputPeerUser
 from telethon import TelegramClient, events
 
-config_data = dict() # data with api_id and api_hash
+config_data = dict()  # data with api_id and api_hash
 
 
-#Check if logs folder exists and if not create's it
+# Check if logs folder exists and if not create's it
 if not os.path.exists('logs'):
     os.makedirs('logs')
 
@@ -37,30 +39,32 @@ api_hash = config_data['api_hash']
 rabbitmq_host = 'rabbitmq'
 # Creating logging file in the project
 logging.basicConfig(
-    level=logging.ERROR,
+    level=logging.INFO,
     filename="logs/logs.log",
     filemode="w",
     format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-logging.Formatter.converter = lambda *args: time.localtime(time.time() + 3 * 3600)
-
-
+logging.Formatter.converter = lambda *args: time.localtime(
+    time.time() + 3 * 3600)
 # Creating client for the user. System version is used for avoiding signing out from all devices after exiting from the program.
-client = TelegramClient('StormTrooper', api_id, api_hash, system_version="4.16.30-vxCUSTOM")
+client = TelegramClient('StormTrooper', api_id, api_hash,
+                        system_version="4.16.30-vxCUSTOM")
 
 # Creating rabbit_mq producer channel with the default exchanger and 'message' queue which will send all satisfied message
 # to the Supplier service
-rabbit_connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host))
+rabbit_connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host, heartbeat=600,
+                                                                    blocked_connection_timeout=300))
 rabbit_channel = rabbit_connection.channel()
 rabbit_channel.queue_declare(queue='messages')
-
 # Checking for the new messages inside the bot
-@client.on(events.NewMessage)
+
+
+@client.on(events.NewMessage())
 async def handler(event):
     # Trying to prevent error if some messages were sended for the user P2P.
     # Main purpose for now to focus on group chats with the keymessages
-    if event.is_group:
+    if event.is_group and event.message.sender != None and event.message.sender.bot == False:
         # Getting information about keywords, which should sattisfy
         with open('resources/keywords.txt', 'r') as f:
             keywords = f.readlines()
@@ -72,16 +76,28 @@ async def handler(event):
         if any(re.search(keyword.strip().lower(), event.message.message.lower()) for keyword in restricted_keywords):
             return
         # Check if message contains any of the keywords
-        if any(re.search(keyword.strip().lower(), event.message.message.lower()) for keyword in keywords):
-            # Create dictionary with user ID and message text
-            data = {
-                'username': event.message.sender.username,
-                'message': event.message.message,
-            }
-            print(data)
-            # Convert dictionary to JSON string and send it to RabbitMQ queue
-            rabbit_channel.basic_publish(exchange='', routing_key='messages', body=json.dumps(data))
-
+        if any(re.search("^" + keyword.strip().lower(), event.message.message.lower()) for keyword in keywords):
+            from_user = await event.get_sender()
+            chat_from = event.chat if event.chat else (await event.get_chat())
+            if from_user.username != None:
+                data = {
+                    'username': from_user.username,
+                    'message': event.message.message,
+                }
+                logging.info(f"User has username {data['username']} has been detected. Chat: {chat_from.title}. Sending message to Supplier")
+                rabbit_channel.basic_publish(
+                    exchange='', routing_key='messages', body=json.dumps(data))
+            elif from_user.phone != None:
+                data = {
+                    
+                    'phone': from_user.phone,
+                    'message': event.message.message,
+                }
+                logging.info(f"User has no username, but has number {data['phone']}. It has been detected. Chat: {chat_from.title}. Sending message to Supplier")
+                rabbit_channel.basic_publish(
+                    exchange='', routing_key='messages', body=json.dumps(data))
+            else:
+                logging.error(f"Username with message {event.message.message} has no anything.Chat: {chat_from.title}")
 
 # Starting the client
 client.start()

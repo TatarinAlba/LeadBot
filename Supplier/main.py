@@ -15,6 +15,7 @@ import markups as nav
 import aio_pika
 import json
 import asyncio
+import threading
 import os
 import logging
 import time
@@ -51,13 +52,14 @@ storage = MemoryStorage()
 
 # Logging information
 logging.basicConfig(
-    level=logging.ERROR,
+    level=logging.INFO,
     filename="logs/logs.log",
     filemode="w",
     format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-logging.Formatter.converter = lambda *args: time.localtime(time.time() + 3 * 3600)
+logging.Formatter.converter = lambda *args: time.localtime(
+    time.time() + 3 * 3600)
 dp = Dispatcher(bot, storage=storage)
 # Repositories for using database
 account_repo = AccountRepository()
@@ -97,16 +99,19 @@ async def starting_process(message: types.Message, state: FSMContext):
                     reply_markup=nav.account_menu,
                 )
             else:
-                account: Account_by_category = account_and_category_repo.getAccountForCategoryByName("Fulfilment")
+                account: Account_by_category = account_and_category_repo.getAccountForCategoryByName(
+                    "Fulfilment")
                 if account.is_enabled_for_search == True:
                     await state.set_state(WorkingStates.run)
                 else:
                     await state.set_state(WorkingStates.stop)
                 await bot.send_message(
-                        chat_id=message.from_id,
-                        text="Рад видеть тебя снова! 🤖👋😊\n\nЗаглянешь в настройки своего бота?\n\n/bot_settings",
-                        reply_markup=nav.close_menu
+                    chat_id=message.from_id,
+                    text="Рад видеть тебя снова! 🤖👋😊\n\nЗаглянешь в настройки своего бота?\n\n/bot_settings",
+                    reply_markup=nav.close_menu
                 )
+
+
 @dp.callback_query_handler(text="category_menu", state=WorkingStates.entered)
 async def category_menu_output(query_call: types.CallbackQuery):
     await bot.delete_message(
@@ -127,7 +132,7 @@ async def category_menu_output(query_call: types.CallbackQuery, state: FSMContex
         category_repo.addCategory(category)
     account_telegram = query_call.from_user.id
     account_with_category = Account_by_category(category.id, account_telegram)
-    if account_and_category_repo.getAccountForCategory(account_with_category) != None:
+    if account_and_category_repo.getAccountForCategoryByName('Fulfilment') != None:
         await bot.delete_message(
             chat_id=query_call.from_user.id, message_id=query_call.message.message_id
         )
@@ -148,6 +153,7 @@ async def category_menu_output(query_call: types.CallbackQuery, state: FSMContex
         text="✅ Успешно\n\nЕсли вы хотите запустить или приостановить бота, используйте команду /bot_settings",
         reply_markup=nav.close_menu,
     )
+
 
 @dp.callback_query_handler(text="close", state="*")
 async def close_window(query_call: types.CallbackQuery):
@@ -222,7 +228,8 @@ async def close_window(query_call: types.CallbackQuery, state: FSMContext):
             reply_markup=nav.control_menu,
         )
     else:
-        account_and_category_repo.turnOnAllCategoriesForAccount(query_call.from_user.id)
+        account_and_category_repo.turnOnAllCategoriesForAccount(
+            query_call.from_user.id)
         await state.set_state(WorkingStates.run)
         await bot.send_message(
             chat_id=query_call.from_user.id,
@@ -234,8 +241,6 @@ async def close_window(query_call: types.CallbackQuery, state: FSMContext):
 """
 If new message will appears from producer, this function will be called
 """
-
-
 async def on_message(message):
     async with message.process():
         data = json.loads(message.body.decode())
@@ -245,16 +250,17 @@ async def on_message(message):
         )
         for person in participants:
             if person.is_enabled_for_search == True:
+                url = data['username'] if 'username' in data.keys() else '+' + data['phone']
                 keyboard_for_lead = InlineKeyboardMarkup(row_width=1).insert(
                     InlineKeyboardButton(
                         text="👨‍🏭 Связаться с заказчиком",
-                        url="https://t.me/" + data["username"],
+                        url="https://t.me/" + url
                     )
                 )
                 await bot.send_message(
-                    person.account_telegram_id,
-                    data["message"],
-                    reply_markup=keyboard_for_lead,
+                    chat_id=person.account_telegram_id,
+                    text=data["message"],
+                    reply_markup=keyboard_for_lead
                 )
 
 
@@ -262,11 +268,10 @@ async def on_message(message):
 Function for registering RabbitMQ consumer
 """
 async def register():
-    while True:
-        connection = await aio_pika.connect_robust("amqp://guest:guest@rabbitmq")
-        rabbit_mq_channel = await connection.channel()
-        queue = await rabbit_mq_channel.declare_queue("messages")
-        await queue.consume(on_message)
+    connection = await aio_pika.connect_robust("amqp://guest:guest@rabbitmq")
+    rabbit_mq_channel = await connection.channel()
+    queue = await rabbit_mq_channel.declare_queue("messages")
+    await queue.consume(on_message)
         
 loop = asyncio.get_event_loop()
 loop.create_task(register())
